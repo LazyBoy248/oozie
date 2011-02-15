@@ -59,6 +59,9 @@ import java.util.Map;
 public class SignalCommand extends WorkflowCommand<Void> {
 
     protected static final String INSTR_SUCCEEDED_JOBS_COUNTER_NAME = "succeeded";
+	protected static final String MAX_CONCURRENT_WORKFLOWS = "oozie.max.concurrent.workflows";
+	protected static final String MAX_CONCURRENT_WORKFLOWS_RETRY_INTERVAL = "oozie.max.concurrent.workflows.retry.interval";
+
 
     private String jobId;
     private String actionId;
@@ -94,7 +97,38 @@ public class SignalCommand extends WorkflowCommand<Void> {
                     boolean completed;
                     if (action == null) {
                         if (workflow.getStatus() == WorkflowJob.Status.PREP) {
-                            completed = workflowInstance.start();
+            
+							/*
+								If the MAX_CONCURRENT_WORKFLOW is defined in the configuration, we
+								ensure the number of concurrent workflow is limited to the threashold.
+
+								If the threshold is reach, we don't start the current request and 
+								re-queue it for a later time.
+							*/
+							String maxConWFStr = Services.get().getConf().get(MAX_CONCURRENT_WORKFLOWS);
+							if (maxConWFStr != null && maxConWFStr.length() != 0) {
+								int maxConWF = Integer.parseInt(maxConWFStr);
+								
+								//Default retry interval is 30 seconds
+								int retryInterval = 30000;
+
+								String maxConWFRetryIntervalStr = 
+									Services.get().getConf().get(MAX_CONCURRENT_WORKFLOWS_RETRY_INTERVAL);
+								
+								if (maxConWFRetryIntervalStr != null || maxConWFRetryIntervalStr.length() != 0) {
+									retryInterval = Integer.parseInt(maxConWFRetryIntervalStr);
+								}
+								
+                    			XLog.getLog(getClass()).debug("Signal command checking ... retryInterval:" + retryInterval + " maxConWF:" + maxConWF);
+
+								if (store.getWorkflowCountWithStatus("RUNNING") >= maxConWF) {
+									XLog.getLog(getClass()).info("Max RUNNING workflows reached, requeuing jobId:" + jobId + " actionId:" + actionId);
+									queueCallable(this, retryInterval);
+									return null;
+								}
+							}
+
+							completed = workflowInstance.start();
                             workflow.setStatus(WorkflowJob.Status.RUNNING);
                             workflow.setStartTime(new Date());
                             workflow.setWorkflowInstance(workflowInstance);
